@@ -27,6 +27,21 @@ A worked example for Douma, Syria, is included in [`examples/douma/`](examples/d
 
 ---
 
+## Project scope and next steps
+
+This repository is an **initial step** towards a larger effort: in-depth analysis of Syrian geography using satellite imagery.
+
+**This step provides:**
+- a generic, tested tool for downloading cloud-free Sentinel-2 imagery (true colour, any spectral band or band composite) clipped to any polygon;
+- a documented method for building an area-of-interest polygon where no official boundary exists (see the [Douma example](examples/douma/));
+- a first worked example, Douma in Rif Dimashq, with sample outputs for every band.
+
+**What comes next:** the later stages will build on this foundation to carry out much deeper analysis of Syrian geography. Their specific goals, study areas and methods will be documented here as they are defined.
+
+The downloader deliberately has no Syria-specific logic, so the same tool can serve every later stage and every study area.
+
+---
+
 ## Requirements
 
 - **Python 3.10 or newer**, available from [python.org](https://www.python.org/downloads/).

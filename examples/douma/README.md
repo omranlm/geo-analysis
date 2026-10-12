@@ -2,6 +2,8 @@
 
 An AOI polygon covering the city of **Douma** (دوما), Rif Dimashq Governorate, Syria, about 10 km north-east of Damascus.
 
+This is the project's first worked example and an initial step towards a larger plan for in-depth analysis of Syrian geography (see [Project scope and next steps](../../README.md#project-scope-and-next-steps)).
+
 | File | Description |
 |---|---|
 | `douma.geojson` | Polygon covering Douma city (EPSG:4326) |
