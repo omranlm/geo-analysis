@@ -1,0 +1,87 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "name": "Douma",
+    "name:ar": "دوما",
+    "country": "Syria",
+    "method": "Convex hull of 85 OSM landuse (residential/commercial/industrial) polygons within Douma city extent",
+    "source": "OpenStreetMap via Overpass API, 2026-10-12",
+    "license": "ODbL 1.0, (c) OpenStreetMap contributors"
+   },
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       36.371902,
+       33.582167
+      ],
+      [
+       36.37619,
+       33.555484
+      ],
+      [
+       36.376314,
+       33.555379
+      ],
+      [
+       36.37722,
+       33.554715
+      ],
+      [
+       36.377464,
+       33.554577
+      ],
+      [
+       36.378749,
+       33.554284
+      ],
+      [
+       36.420873,
+       33.556198
+      ],
+      [
+       36.42942,
+       33.55665
+      ],
+      [
+       36.432378,
+       33.558913
+      ],
+      [
+       36.432729,
+       33.559689
+      ],
+      [
+       36.432713,
+       33.560377
+      ],
+      [
+       36.431316,
+       33.597407
+      ],
+      [
+       36.431091,
+       33.59882
+      ],
+      [
+       36.387464,
+       33.599857
+      ],
+      [
+       36.385949,
+       33.599793
+      ],
+      [
+       36.371902,
+       33.582167
+      ]
+     ]
+    ]
+   }
+  }
+ ]
+}

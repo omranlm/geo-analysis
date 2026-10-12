@@ -1,0 +1,4 @@
+pystac-client
+rasterio
+shapely
+numpy
