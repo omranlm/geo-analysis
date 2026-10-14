@@ -27,7 +27,15 @@ python download_s2.py examples/douma/douma.geojson --start 2026-06-01 --end 2026
 
 # False colour
 python download_s2.py examples/douma/douma.geojson --start 2026-06-01 --end 2026-09-30 --bands falsecolor
+
+# Clearest winter image, judged by cloud over Douma itself
+python download_s2.py examples/douma/douma.geojson --start 2026-01-01 --end 2026-02-28 --max-aoi-cloud 5
+
+# Time series: every scene of 2026 that is clear over Douma
+python download_s2.py examples/douma/douma.geojson --start 2026-01-01 --end 2026-09-30 --all-scenes --max-aoi-cloud 5 --out-dir output/douma_2026
 ```
+
+In January–February 2026, 14 scenes cover Douma. Measured over the city, only 3 are clear (4 Jan, 18 Feb and 28 Feb), and 2 of those 3 have more than 10% cloud across the whole tile.
 
 - Douma falls in Sentinel-2 tile **37SBT** (UTM zone 37N, EPSG:32637).
 - At 10 m resolution the output is about **560 × 505 px**.

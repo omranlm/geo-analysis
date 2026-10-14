@@ -2,7 +2,7 @@
 
 Download cloud-free Sentinel-2 imagery for **any area of interest (AOI)** defined by a GeoJSON polygon. The default output is true colour (RGB). You can also download any of the 12 spectral bands, or presets such as false colour and SWIR.
 
-The script searches the free [Element 84 Earth Search](https://earth-search.aws.element84.com/v1) catalogue of Sentinel-2 Level-2A imagery hosted on AWS. It picks the least-cloudy scene that fully covers your polygon and downloads only the pixels inside it, so a city-sized area is a few MB, not a full ~1 GB scene. No account or API key is needed.
+The script searches the free [Element 84 Earth Search](https://earth-search.aws.element84.com/v1) catalogue of Sentinel-2 Level-2A imagery hosted on AWS. It downloads either the least-cloudy scene that fully covers your polygon or, with `--all-scenes`, every matching scene as a time series. It can also measure cloud cover over your own area, not just over the whole satellite tile. Only the pixels inside your polygon are downloaded, so a city-sized area is a few MB per scene, not a full ~1 GB scene. No account or API key is needed.
 
 A worked example for Douma, Syria, is included in [`examples/douma/`](examples/douma/).
 
@@ -54,6 +54,7 @@ The downloader deliberately has no Syria-specific logic, so the same tool can se
   | `rasterio` | Reads the remote GeoTIFFs, clips them and writes the outputs. The pip wheel includes GDAL and PROJ, so you don't need to install GDAL separately. |
   | `shapely` | Checks that a scene fully covers the AOI |
   | `numpy` | Array processing |
+  | `tqdm` | Progress bars |
 
 ---
 
@@ -101,18 +102,28 @@ pip install -r requirements.txt
 ### 4. Check the installation
 
 ```bash
-python -c "import rasterio, pystac_client, shapely; print('OK')"
+python -c "import rasterio, pystac_client, shapely, tqdm; print('OK')"
 ```
 
 ---
 
 ## Preparing your area of interest
 
-The script needs a GeoJSON file containing **one polygon** in **EPSG:4326** (longitude/latitude). Any of these forms is accepted:
+The script needs a GeoJSON file containing your area as **polygons** in **EPSG:4326** (longitude/latitude). Any of these forms is accepted:
 
-- a `FeatureCollection` (only the **first** feature is used)
+- a `FeatureCollection`
 - a single `Feature`
 - a bare `Polygon` or `MultiPolygon` geometry
+
+**Several polygons in one file** are merged into a single area of interest, and the output covers all of them. When a file has more than one polygon, the script lists each one with its area. It flags any polygon smaller than one 10 m pixel, which is usually a stray click while drawing:
+
+```
+Note: near-douma.geojson has 2 polygons; they are merged into one AOI:
+  feature 1: 0.0000 km2 (12 m2)  <- smaller than one 10 m pixel; probably drawn by accident
+  feature 2: 0.2828 km2 (282,833 m2)
+```
+
+If you see a polygon you didn't mean to draw, delete it from the file and run again. Points and lines in the file are ignored, with a warning.
 
 Ways to get one:
 
@@ -140,13 +151,77 @@ Ways to get one:
 python download_s2.py path/to/my_area.geojson
 ```
 
-This searches the **last 90 days** for scenes with **less than 10% cloud cover**, downloads the best one and saves the results in `./output`, named after the AOI file.
+This searches the **last 90 days** for scenes with **less than 10% cloud cover**, downloads the **single best one** and saves the results in `./output`, named after the AOI file.
 
 ### Choosing a date range
 
 ```bash
 python download_s2.py my_area.geojson --start 2026-06-01 --end 2026-09-30
 ```
+
+By default, the date range is a **search window**: the script looks at every scene in it but downloads only the least-cloudy one. To download every scene in the window, see [Downloading a time series](#downloading-a-time-series).
+
+### Filtering clouds over your area
+
+Sentinel-2 scenes are tiles of about 110 × 110 km, and the catalogue's cloud figure (`--max-cloud`) is for the **whole tile**. Your area may be a small part of it, so this figure can be misleading in both directions: a "10% cloudy" tile can have its one cloud right over your area, and a "40% cloudy" tile can be perfectly clear over it.
+
+`--max-aoi-cloud` measures cloud **inside your polygon** for each candidate scene, using the scene classification layer (SCL) that comes with every Level-2A scene. Pixels classified as cloud (medium or high probability), thin cirrus or **cloud shadow** count as cloudy.
+
+```bash
+# Only accept scenes with at most 5% cloud over the AOI
+python download_s2.py my_area.geojson --start 2026-01-01 --end 2026-02-28 --max-aoi-cloud 5
+```
+
+```
+Found 14 scenes (one per date) fully covering the AOI between 2026-01-01 and 2026-02-28 with tile cloud < 100%.
+  2026-01-04  tile= 15.17%  AOI=  0.00%  ok
+  2026-01-06  tile= 40.76%  AOI=100.00%  too cloudy
+  ...
+  2026-02-25  tile= 24.14%  AOI= 39.55%  too cloudy
+  2026-02-28  tile=  9.22%  AOI=  0.00%  ok
+Checking AOI cloud: 100%|██████████| 14/14 [00:41<00:00,  2.95s/scene, 3 clear]
+3 scenes have AOI cloud <= 5%.
+```
+
+In this Douma example, two of the three clear scenes (4 Jan and 18 Feb) have tile cloud above 10%, so the default tile filter would have rejected them.
+
+How it combines with `--max-cloud`:
+- When `--max-aoi-cloud` is set, `--max-cloud` defaults to **100** (no tile filter), so no clear scene is missed. You can still set both; `--max-cloud 60` speeds things up by skipping very cloudy tiles before the AOI check.
+- When a single scene is downloaded, the best one is the scene with the **lowest AOI cloud**; ties are broken by tile cloud, then by the most recent date.
+- The check reads the small SCL layer for every candidate scene, which takes a few seconds per scene, depending on your connection. For long date ranges, a loose `--max-cloud` keeps it quick.
+
+### Downloading a time series
+
+Add `--all-scenes` to download **every** scene that matches, instead of only the best one. This is the starting point for change analysis, such as seasonal vegetation, urban growth, or damage and reconstruction.
+
+```bash
+# Every scene from 2026 with at most 5% cloud over the AOI
+python download_s2.py my_area.geojson --start 2026-01-01 --end 2026-09-30 --all-scenes --max-aoi-cloud 5
+```
+
+- **One scene per date.** If the same date appears more than once (overlapping tiles or reprocessed versions), only the least-cloudy copy is kept.
+- **Oldest first.** Scenes are downloaded in date order, each into its own dated files.
+- **Scene list.** A `<name>_scenes.csv` file lists every downloaded scene with its date, STAC item ID, tile cloud, AOI cloud and reflectance file name, ready to load into pandas, R or a spreadsheet.
+- **Safety limit.** If more than `--max-scenes` scenes match (default **50**), the script stops before downloading anything and tells you how many matched. Narrow the date range, tighten the cloud limits, or raise the limit (`--max-scenes 0` removes it). Sentinel-2 revisits every 2–5 days, so a year can easily be 100+ scenes.
+- **Failures don't stop the run.** If one scene fails to download, it's reported and the rest continue. Run the same command again with `--resume` to retry only the failed ones.
+
+#### Resuming an interrupted run
+
+Long series can take an hour or more. If a run is interrupted (Ctrl+C, a network outage, a closed laptop), run the **same command again with `--resume`**:
+
+```bash
+python download_s2.py my_area.geojson --start 2015-06-01 --end 2026-10-14 --all-scenes --max-cloud 30 --max-aoi-cloud 5 --max-scenes 0 --resume
+```
+
+- Scenes whose reflectance GeoTIFF is already in `--out-dir` are **skipped**; only the missing ones are downloaded.
+- With `--max-aoi-cloud`, the AOI cloud of already-downloaded scenes is read from their files (it is stored in the GeoTIFF metadata), so they are **not re-checked**.
+- `--max-scenes` counts only the scenes **still to download**.
+- The scene list CSV is rewritten and lists **every** scene, old and new.
+- Interrupted downloads are safe to resume. The reflectance file is written as `….part.tif` and renamed only once the scene is complete, so a half-written scene is never mistaken for a finished one. Leftover `.part.tif` files are overwritten on the next run.
+
+Use the **same `--out-dir`, `--name` and `--bands`** as the original run, because skipping works by file name. Don't reuse an output folder for a different area under the same file name: those scenes would be skipped too. `--resume` also works without `--all-scenes`: it skips the download if the best scene is already there.
+
+Combining `--all-scenes` with `--max-aoi-cloud` is recommended. It keeps cloudy dates out of the series without throwing away dates that are clear over your area.
 
 ### Choosing bands
 
@@ -197,8 +272,9 @@ B10 (cirrus) is used only during processing and is not included in Level-2A data
 
 ```
 python download_s2.py AOI [--bands BANDS] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
-                          [--max-cloud PERCENT] [--resampling METHOD]
-                          [--out-dir DIR] [--name PREFIX]
+                          [--max-cloud PERCENT] [--max-aoi-cloud PERCENT]
+                          [--all-scenes] [--max-scenes N] [--resampling METHOD]
+                          [--out-dir DIR] [--name PREFIX] [--resume] [--no-progress]
 python download_s2.py --list-bands
 ```
 
@@ -209,10 +285,15 @@ python download_s2.py --list-bands
 | `--list-bands` | | Print all bands and presets, then exit |
 | `--start` | 90 days ago | First date to search |
 | `--end` | today | Last date to search |
-| `--max-cloud` | `10` | Maximum cloud cover for the whole scene, in percent |
+| `--max-cloud` | `10`, or `100` with `--max-aoi-cloud` | Maximum cloud cover of the **whole tile**, in percent (catalogue metadata) |
+| `--max-aoi-cloud` | not checked | Maximum cloud cover **inside your polygon**, in percent, measured from the SCL layer (see [Filtering clouds over your area](#filtering-clouds-over-your-area)) |
+| `--all-scenes` | off | Download every matching scene (one per date) instead of only the best one (see [Downloading a time series](#downloading-a-time-series)) |
+| `--max-scenes` | `50` | With `--all-scenes`, stop without downloading if more scenes than this match; `0` means no limit |
 | `--resampling` | `bilinear` | How 20 m and 60 m bands are brought to 10 m: `nearest`, `bilinear` or `cubic` |
 | `--out-dir` | `output` | Folder where the results are saved |
 | `--name` | AOI file name | Prefix for the output file names |
+| `--resume` | off | Skip scenes already downloaded to `--out-dir`, to continue an interrupted run (see [Resuming an interrupted run](#resuming-an-interrupted-run)) |
+| `--no-progress` | off | Hide the progress bars, e.g. when saving the output to a log file |
 
 Run `python download_s2.py --help` to see the same list in the terminal.
 
@@ -233,29 +314,54 @@ python download_s2.py examples/douma/douma.geojson --bands red,nir
 # Every spectral band, keeping original pixel values
 python download_s2.py examples/douma/douma.geojson --bands all --resampling nearest
 
-# Cloudier season: allow more cloud and search a wider window
-python download_s2.py examples/douma/douma.geojson --start 2025-12-01 --end 2026-02-28 --max-cloud 30
+# Cloudier season: judge clouds over the AOI, not the whole tile
+python download_s2.py examples/douma/douma.geojson --start 2025-12-01 --end 2026-02-28 --max-aoi-cloud 5
+
+# Time series: every clear scene of 2026 in false colour, in its own folder
+python download_s2.py examples/douma/douma.geojson --start 2026-01-01 --end 2026-09-30 --all-scenes --max-aoi-cloud 5 --bands falsecolor --out-dir output/douma_2026
 
 # Historical image, saved to its own folder with a custom file prefix
 python download_s2.py examples/douma/douma.geojson --start 2018-03-01 --end 2018-05-31 --out-dir output/2018 --name douma_2018
 ```
 
-### Example console output
+### Progress output
+
+Each step of the process shows a progress bar, so you can see what the script is doing and roughly how long is left:
+
+| Step | Bar | Counts |
+|---|---|---|
+| Catalogue search | `Searching catalogue` | Scenes returned by the catalogue; the label shows how many fully cover the AOI |
+| AOI cloud check (with `--max-aoi-cloud`) | `Checking AOI cloud` | Scenes checked; the label shows how many are clear. One line per scene is printed above the bar. |
+| Download of one scene | `Downloading <date>` | Steps: output grid, **each band**, writing the reflectance GeoTIFF, writing the previews. The label names the current step, for example `nir (B08)`. |
+| Time series (with `--all-scenes`) | `Scenes` | Scenes downloaded. Each scene's own `Downloading <date>` bar appears below it while it runs, and a `saved …` line is printed when it finishes. |
+
+Example, single scene:
 
 ```
-Found 22 candidate scenes; best:
-  S2A_37SBT_20260913_1_L2A  2026-09-13  cloud=0.00%
-  S2B_37SBT_20260916_0_L2A  2026-09-16  cloud=0.00%
+Searching catalogue: 100%|██████████| 67/67 [00:03<00:00, 18.50scene/s, 34 cover the AOI]
+Found 34 scenes (one per date) fully covering the AOI between 2026-06-01 and 2026-09-30 with tile cloud < 10%.
+Best scenes:
+  S2A_37SBT_20260913_1_L2A  2026-09-13  tile cloud=0.00%
+  S2B_37SBT_20260916_0_L2A  2026-09-16  tile cloud=0.00%
   ...
-Downloading S2A_37SBT_20260913_1_L2A ...
-  red (B04): 560x505 px
-  green (B03): 560x505 px
-  blue (B02): 560x505 px
+Downloading S2A_37SBT_20260913_1_L2A  2026-09-13  tile cloud=0.00%
+  3 bands on a 560x505 px 10 m grid
+Downloading 2026-09-13: 100%|██████████| 6/6 [00:13<00:00,  2.19s/step, done]
 Saved:
   output\douma_20260913_rgb_reflectance.tif
   output\douma_20260913_rgb_8bit.tif
   output\douma_20260913_rgb.png
 ```
+
+Example, time series (while scene 2 of 3 is downloading):
+
+```
+  saved S2C_37SBT_20260901_0_L2A  2026-09-01  tile cloud=0.68%
+Scenes:  33%|███▎      | 1/3 [00:13<00:26, 13.14s/scene]
+Downloading 2026-09-03:  50%|█████     | 3/6 [00:06<00:07,  2.45s/step, blue (B02)]
+```
+
+The bars are drawn on the terminal's error stream (stderr), and the results on standard output (stdout). When you save the output to a file (`python download_s2.py ... > log.txt`), only the results go to the file. Use `--no-progress` to turn the bars off completely.
 
 ---
 
@@ -270,6 +376,7 @@ Files are named `<name>_<YYYYMMDD>_<bands>_...`, where:
 | `*_reflectance.tif` | GeoTIFF, one band per requested band, **uint16** | Analysis. Surface reflectance × 10000; divide by 10000 to get reflectance from 0 to 1. Each band is labelled with its ID and wavelength (for example `B08 NIR 842 nm`). |
 | `*_8bit.tif` | GeoTIFF, **uint8** | Viewing in QGIS/ArcGIS or as a basemap, with a contrast stretch applied. |
 | `*.png` | PNG | Quick visual check. Not georeferenced. |
+| `<name>_scenes.csv` | CSV | Only with `--all-scenes`: one row per downloaded scene (date, STAC item, tile cloud %, AOI cloud %, reflectance file). |
 
 The `_8bit.tif` and `.png` previews are made only when you request **3 bands** (a colour composite) or **1 band** (greyscale). For other counts, such as `--bands all`, only the reflectance GeoTIFF is written.
 
@@ -282,22 +389,27 @@ Common to both GeoTIFFs:
 - **Resolution:** 10 m for every band (see [Choosing bands](#choosing-bands))
 - **NoData:** `0` (pixels outside the polygon)
 - **Compression:** Deflate, tiled
-- **Metadata tags:** the STAC item ID, scene cloud cover and band list are stored in the reflectance file (`gdalinfo` shows them)
+- **Metadata tags:** the STAC item ID, tile cloud cover, AOI cloud cover (when checked) and band list are stored in the reflectance file (`gdalinfo` shows them)
 
 ---
 
 ## How it works
 
 1. **Load the AOI** from the GeoJSON file.
-2. **Search** the Earth Search `sentinel-2-l2a` collection for scenes that intersect the AOI within the date range and below the cloud limit.
-3. **Filter** out scenes whose footprint does not fully contain the AOI, such as scenes cut off at the edge of a satellite pass.
-4. **Rank** the remaining scenes by cloud cover (lowest first), with the most recent first among equal cloud cover. The top 5 are printed and the first is used.
-5. **Define the output grid:** a 10 m grid covering the AOI, aligned to the pixels of the scene's 10 m bands.
-6. **Download** each requested band. The bands are Cloud-Optimized GeoTIFFs, so rasterio reads only the blocks around the AOI over HTTP. Each band is read onto the output grid, which resamples 20 m and 60 m bands to 10 m, and pixels outside the polygon are masked.
-7. **Correct the 1000 offset.** Scenes from processing baseline 04.00 onwards (January 2022 and later) store pixel values with 1000 added. The script removes this offset when Earth Search reports it has not already been removed (`earthsearch:boa_offset_applied`), so values from older and newer scenes can be compared.
-8. **Write** the reflectance GeoTIFF, then, for 1- or 3-band selections, stretch it to 8 bits with a mild gamma to make the preview GeoTIFF and PNG.
+2. **Search** the Earth Search `sentinel-2-l2a` collection for scenes that intersect the AOI within the date range and below the tile cloud limit.
+3. **Filter** out scenes whose footprint does not fully contain the AOI, such as scenes cut off at the edge of a satellite pass, and keep one scene per date.
+4. **Check AOI cloud** (only with `--max-aoi-cloud`): read each scene's SCL layer inside the polygon, compute the share of cloud, cirrus and cloud-shadow pixels, and drop scenes above the limit.
+5. **Choose scenes:**
+   - **By default**, rank by cloud cover, using AOI cloud when it was checked and tile cloud otherwise, with the most recent first among ties. The top 5 are printed and the first is downloaded.
+   - **With `--all-scenes`**, keep every scene, check the `--max-scenes` limit, and download them oldest first.
 
-**Note on cloud cover:** `--max-cloud` filters on the cloud percentage of the **whole Sentinel-2 tile**, not of your AOI. A scene listed at 5% may still have a cloud over your area, and a 40% scene may be clear over it. If the result is cloudy, look at the other candidates the script prints and narrow the date range around a better one.
+   Steps 6 to 9 then run for each scene being downloaded.
+6. **Define the output grid:** a 10 m grid covering the AOI, aligned to the pixels of the scene's 10 m bands.
+7. **Download** each requested band. The bands are Cloud-Optimized GeoTIFFs, so rasterio reads only the blocks around the AOI over HTTP. Each band is read onto the output grid, which resamples 20 m and 60 m bands to 10 m, and pixels outside the polygon are masked.
+8. **Correct the 1000 offset.** Scenes from processing baseline 04.00 onwards (January 2022 and later) store pixel values with 1000 added. The script removes this offset when Earth Search reports it has not already been removed (`earthsearch:boa_offset_applied`), so values from older and newer scenes can be compared.
+9. **Write** the reflectance GeoTIFF, then, for 1- or 3-band selections, stretch it to 8 bits with a mild gamma to make the preview GeoTIFF and PNG. With `--all-scenes`, also add a row to the scene list CSV.
+
+**Note on cloud cover:** `--max-cloud` alone filters on the cloud percentage of the **whole Sentinel-2 tile**, which can be misleading for a small AOI. Use `--max-aoi-cloud` for a reliable result. The SCL classification itself is automatic and not perfect: very thin haze can be missed, and bright rooftops or sand are occasionally flagged as cloud.
 
 ---
 
@@ -315,8 +427,17 @@ See [`examples/douma/`](examples/douma/) for the layout.
 
 ## Troubleshooting
 
-**`No scenes fully covering the AOI with cloud cover < X% ...`**
-Widen the date range (`--start`/`--end`) or raise `--max-cloud`. Sentinel-2 images the same spot about every 5 days, but persistently cloudy regions and seasons need wider windows. If no scene is found even with generous settings, your AOI may cross a tile boundary or be larger than one tile; split it into smaller pieces.
+**`No scenes match (tile cloud < X% ...)`**
+Widen the date range (`--start`/`--end`), raise `--max-cloud`, or switch to `--max-aoi-cloud`, which often finds clear scenes that the tile filter rejects. Sentinel-2 images the same spot about every 5 days, but persistently cloudy regions and seasons need wider windows. If no scene is found even with generous settings, your AOI may cross a tile boundary or be larger than one tile; split it into smaller pieces.
+
+**`N scenes match, more than --max-scenes 50`**
+This is the `--all-scenes` safety limit, and nothing has been downloaded yet. Narrow the date range, add `--max-aoi-cloud` to drop cloudy dates, or raise the limit with `--max-scenes 200` (or `0` for no limit) if you really want them all. Things to keep in mind:
+- Sentinel-2 data starts in **mid-2015**, so earlier start dates add nothing. The full archive from 2015 is typically 400+ scenes under 10% tile cloud, at about 10–15 seconds per scene.
+- When adding `--max-aoi-cloud` to a long range, also keep a loose tile filter such as `--max-cloud 30`. Otherwise every scene since 2015 is cloud-checked before anything downloads.
+- For multi-hour runs, add `--resume` so an interruption doesn't mean starting over (see [Resuming an interrupted run](#resuming-an-interrupted-run)).
+
+**`AOI cloud check failed ...; skipped`**
+The SCL layer of that scene couldn't be read, usually because of a temporary network error. The scene is left out; run the command again to include it.
 
 **`CRSError: The EPSG code is unknown ... proj.db ... comes from another PROJ installation`**
 Another program, such as PostGIS, QGIS or OSGeo4W, has set a `PROJ_LIB` environment variable that points to an incompatible PROJ database. The script already works around this by using rasterio's bundled PROJ data. If you see this error in your own code, run `set PROJ_LIB=` (cmd) or `Remove-Item Env:PROJ_LIB` (PowerShell) before running it.
